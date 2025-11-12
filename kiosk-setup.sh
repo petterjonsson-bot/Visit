@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
-# setup-kiosk.sh – One-shot install för Chromium-kiosk med watchdog
-# Användning:
-#   ./kiosk-setup.sh [--url URL] [--user <user>] [--disable-gpu] [--no-refresh]
-# Tips: Första gången (om filen kan ha CRLF), kör: bash kiosk-setup.sh --url "https://int1.visitlinkoping.se/spot"
 
 set -euo pipefail
 
-# --- Självläkning: säkerställ att vi körs med bash och utan CRLF ---
-# Om vi inte redan körs med bash: starta om oss själva med bash.
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
 fi
 
-# Om filen innehåller CRLF, skriv om till LF och starta om (gäller när vi körs via `bash script`).
 if grep -q $'\r' "$0"; then
   echo "[setup-kiosk] Upptäckte Windows-radslut (CRLF) – fixar..."
   tmp="$(mktemp)"
@@ -56,13 +49,11 @@ fi
 
 USER_HOME=$(eval echo "~${PI_USER}")
 
-# ======= Grundsystem / raspi-config =======
 if ! command -v raspi-config >/dev/null 2>&1; then
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y raspi-config || true
 fi
 
-# Autologin till Desktop
 if command -v raspi-config >/dev/null 2>&1; then
   echo "==> Sätter autologin till Desktop (raspi-config B4)…"
   raspi-config nonint do_boot_behaviour B4 || true
@@ -71,11 +62,9 @@ if command -v raspi-config >/dev/null 2>&1; then
   raspi-config nonint do_wayland 1 || true
 fi
 
-# ======= Paket =======
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y xdotool unclutter coreutils sed dbus-x11
 
-# Hitta/Installera Chromium
 CHROME_BIN=""
 for c in /usr/bin/chromium-browser /usr/bin/chromium /snap/bin/chromium; do
   [[ -x "$c" ]] && CHROME_BIN="$c" && break
@@ -284,3 +273,4 @@ $ENABLE_REFRESH_TIMER && echo "     systemctl status kiosk-refresh.timer"
 echo
 echo "   Ändra URL framöver:"
 echo "     sudo sed -i \"s#^KIOSK_URL=.*#KIOSK_URL=\\\"${KIOSK_URL}\\\"#\" ${KIOSK_SH} && sudo systemctl restart kiosk.service"
+
