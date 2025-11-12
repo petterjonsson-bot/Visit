@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # setup-kiosk.sh – One-shot install för Chromium-kiosk med watchdog
-# Användning:
-#   sudo ./kiosk-setup.sh [--url URL] [--user <user>] [--disable-gpu] [--no-refresh]
+# Usage:
+#   sudo ./kiosk-setup.sh [--url URL] [--user <user>] [--mode stable|fast|ultra] [--no-refresh]
+#   Modes:
+#     stable (default):  GPU off  (disable-gpu, raster off)  <- rekommenderad
+#     fast:              GPU on   (Chromiums standard)
+#     ultra:             SwiftShader mjukvaru-GL (max stabilitet)
 
 set -euo pipefail
 
-# --- Självläkning: kör med bash om vi råkar startas av sh ---
+# --- Se till att köra med bash och inte sh ---
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
 fi
 
-# --- CRLF-koll: endast om skriptet körs från en läsbar fil (inte via stdin) ---
+# --- CRLF-koll: endast om $0 är läsbar fil (inte stdin) ---
 if [ -r "$0" ] && grep -q $'\r' "$0" 2>/dev/null; then
   echo "[setup-kiosk] Upptäckte CRLF – fixar..."
   tmp="$(mktemp)"
@@ -19,48 +23,47 @@ if [ -r "$0" ] && grep -q $'\r' "$0" 2>/dev/null; then
   exec bash "$tmp" "$@"
 fi
 
-# --- Auto-sudo: höj behörighet om vi inte är root ---
+# --- Auto-sudo ---
 if [ "$(id -u)" -ne 0 ]; then
   exec sudo -E bash "$0" "$@"
 fi
 
 # ======= Standardvärden =======
-KIOSK_URL="https://ext1.visitlinkoping.se/spot"
-PI_USER="${SUDO_USER:-${USER:-pi}}"   # använd den som körde scriptet, om inte --user anges
-DISABLE_GPU=false
-ENABLE_REFRESH_TIMER=true
+KIOSK_URL="https://int1.visitlinkoping.se/spot"
+PI_USER="${SUDO_USER:-${USER:-pi}}"
+MODE="stable"                # stable|fast|ultra
+ENABLE_REFRESH_TIMER=true    # daglig F5 04:30
 
 # ======= Argument =======
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --url) KIOSK_URL="$2"; shift 2 ;;
-    --user) PI_USER="$2"; shift 2 ;;
-    --disable-gpu) DISABLE_GPU=true; shift ;;
+    --url)        KIOSK_URL="$2"; shift 2 ;;
+    --user)       PI_USER="$2"; shift 2 ;;
+    --mode)       MODE="$2"; shift 2 ;;
     --no-refresh) ENABLE_REFRESH_TIMER=false; shift ;;
     *) echo "Okänt argument: $1"; exit 1 ;;
   esac
 done
 
 echo "==> Installerar kiosk"
-echo "    Användare: ${PI_USER}"
-echo "    URL:       ${KIOSK_URL}"
-echo "    Disable GPU: ${DISABLE_GPU}"
-echo "    Daglig soft refresh 04:30: ${ENABLE_REFRESH_TIMER}"
+echo "    Användare : ${PI_USER}"
+echo "    URL       : ${KIOSK_URL}"
+echo "    Mode      : ${MODE}"
+echo "    Daily F5  : ${ENABLE_REFRESH_TIMER}"
 
 # ======= Kontroller =======
 if ! id -u "${PI_USER}" >/dev/null 2>&1; then
   echo "Användaren ${PI_USER} finns inte."; exit 1
 fi
-
 USER_HOME=$(eval echo "~${PI_USER}")
 
-# ======= Autologin/Wayland: försök varsamt, annars hoppa över =======
+# ======= Försök aktivera autologin & X11 om möjligt (hoppa över annars) =======
 if command -v raspi-config >/dev/null 2>&1; then
   if raspi-config nonint help 2>/dev/null | grep -q 'do_boot_behaviour'; then
-    raspi-config nonint do_boot_behaviour B4 || true   # Autologin till desktop
+    raspi-config nonint do_boot_behaviour B4 || true  # Autologin to desktop
   fi
   if raspi-config nonint help 2>/dev/null | grep -q 'do_wayland'; then
-    raspi-config nonint do_wayland 1 || true           # Försök växla till X11
+    raspi-config nonint do_wayland 1 || true          # Försök X11 (1) istället för Wayland
   fi
 fi
 
@@ -68,7 +71,7 @@ fi
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y xdotool unclutter coreutils sed dbus-x11
 
-# Hitta/Installera Chromium
+# Chromium (hantera olika binärnamn)
 CHROME_BIN=""
 for c in /usr/bin/chromium-browser /usr/bin/chromium /snap/bin/chromium; do
   [[ -x "$c" ]] && CHROME_BIN="$c" && break
@@ -86,13 +89,29 @@ if [[ -z "$CHROME_BIN" ]]; then
 fi
 echo "==> Chromium: $CHROME_BIN"
 
+# ======= Render-flaggor beroende på mode =======
+GPU_FLAG=""
+case "$MODE" in
+  stable)
+    GPU_FLAG="--disable-gpu --disable-accelerated-2d-canvas --disable-gpu-rasterization"
+    ;;
+  fast)
+    GPU_FLAG=""  # standard: låt Chromium använda GPU
+    ;;
+  ultra)
+    GPU_FLAG="--use-gl=swiftshader --disable-accelerated-video-decode --disable-gpu-rasterization"
+    ;;
+  *)
+    echo "Ogiltigt --mode: $MODE (tillåtna: stable|fast|ultra)"; exit 1 ;;
+esac
+
+# Alltid tysta kamera/mikrofon-portalen (onödig i kiosk)
+MEDIA_FLAG="--use-fake-ui-for-media-stream"
+
 # ======= Script: kiosk + watchdog =======
 PROFILE_DIR="${USER_HOME}/.config/chromium"
 KIOSK_SH="${USER_HOME}/kiosk.sh"
 WATCHDOG_SH="${USER_HOME}/chrome_watchdog.sh"
-
-GPU_FLAG=""
-$DISABLE_GPU && GPU_FLAG="--disable-gpu --disable-accelerated-2d-canvas"
 
 cat > "${KIOSK_SH}" <<EOF
 #!/usr/bin/env bash
@@ -106,7 +125,7 @@ PROFILE_DIR="${PROFILE_DIR}"
 export DISPLAY XAUTHORITY
 export XDG_RUNTIME_DIR="/run/user/\$(id -u ${PI_USER})"
 
-# Vänta tills X/X11-session är igång
+# Vänta tills X-session är igång
 for i in {1..60}; do xset q >/dev/null 2>&1 && break; sleep 1; done
 
 # Stäng av skärmsläckning/DPMS
@@ -121,7 +140,7 @@ CHROME_FLAGS="--kiosk --noerrdialogs --disable-session-crashed-bubble --disable-
  --no-first-run --fast --fast-start --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT' \
  --autoplay-policy=no-user-gesture-required --overscroll-history-navigation=0 \
  --password-store=basic --disable-features=Translate,InfiniteSessionRestore \
- --enable-features=OverlayScrollbar ${GPU_FLAG} \
+ --enable-features=OverlayScrollbar ${GPU_FLAG} ${MEDIA_FLAG} \
  --user-data-dir=\${PROFILE_DIR} --app=\${KIOSK_URL}"
 
 while true; do
@@ -229,7 +248,7 @@ Environment=XAUTHORITY=${USER_HOME}/.Xauthority
 WantedBy=graphical.target
 EOF
 
-# (Valfritt) Daglig soft reload (F5) 04:30
+# (Valfritt) Daglig soft reload 04:30
 REFRESH_SERVICE="/etc/systemd/system/kiosk-refresh.service"
 REFRESH_TIMER="/etc/systemd/system/kiosk-refresh.timer"
 cat > "${REFRESH_SERVICE}" <<EOF
@@ -275,5 +294,5 @@ echo "     systemctl status kiosk.service"
 echo "     systemctl status chrome-watchdog.service"
 $ENABLE_REFRESH_TIMER && echo "     systemctl status kiosk-refresh.timer"
 echo
-echo "   Ändra URL framöver:"
+echo "   Ändra URL:"
 echo "     sudo sed -i \"s#^KIOSK_URL=.*#KIOSK_URL=\\\"${KIOSK_URL}\\\"#\" ${KIOSK_SH} && sudo systemctl restart kiosk.service"
