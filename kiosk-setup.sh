@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
+# setup-kiosk.sh – One-shot install för Chromium-kiosk med watchdog
+# Användning:
+#   sudo ./kiosk-setup.sh [--url URL] [--user <user>] [--disable-gpu] [--no-refresh]
 
 set -euo pipefail
 
+# --- Självläkning: kör med bash om vi råkar startas av sh ---
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
 fi
 
-if grep -q $'\r' "$0"; then
-  echo "[setup-kiosk] Upptäckte Windows-radslut (CRLF) – fixar..."
+# --- CRLF-koll: endast om skriptet körs från en läsbar fil (inte via stdin) ---
+if [ -r "$0" ] && grep -q $'\r' "$0" 2>/dev/null; then
+  echo "[setup-kiosk] Upptäckte CRLF – fixar..."
   tmp="$(mktemp)"
   tr -d '\r' < "$0" > "$tmp"
   chmod +x "$tmp"
@@ -20,8 +25,8 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 # ======= Standardvärden =======
-KIOSK_URL="https://int1.visitlinkoping.se/spot"
-PI_USER="${SUDO_USER:-${USER:-pi}}"
+KIOSK_URL="https://ext1.visitlinkoping.se/spot"
+PI_USER="${SUDO_USER:-${USER:-pi}}"   # använd den som körde scriptet, om inte --user anges
 DISABLE_GPU=false
 ENABLE_REFRESH_TIMER=true
 
@@ -33,7 +38,7 @@ while [[ $# -gt 0 ]]; do
     --disable-gpu) DISABLE_GPU=true; shift ;;
     --no-refresh) ENABLE_REFRESH_TIMER=false; shift ;;
     *) echo "Okänt argument: $1"; exit 1 ;;
-  endcase
+  esac
 done
 
 echo "==> Installerar kiosk"
@@ -49,22 +54,21 @@ fi
 
 USER_HOME=$(eval echo "~${PI_USER}")
 
-if ! command -v raspi-config >/dev/null 2>&1; then
-  apt-get update
-  DEBIAN_FRONTEND=noninteractive apt-get install -y raspi-config || true
-fi
-
+# ======= Autologin/Wayland: försök varsamt, annars hoppa över =======
 if command -v raspi-config >/dev/null 2>&1; then
-  echo "==> Sätter autologin till Desktop (raspi-config B4)…"
-  raspi-config nonint do_boot_behaviour B4 || true
-  echo "==> Försöker växla till X11 (bort från Wayland)…"
-  # Vissa images har denna växel, andra ignorerar bara kommandot.
-  raspi-config nonint do_wayland 1 || true
+  if raspi-config nonint help 2>/dev/null | grep -q 'do_boot_behaviour'; then
+    raspi-config nonint do_boot_behaviour B4 || true   # Autologin till desktop
+  fi
+  if raspi-config nonint help 2>/dev/null | grep -q 'do_wayland'; then
+    raspi-config nonint do_wayland 1 || true           # Försök växla till X11
+  fi
 fi
 
+# ======= Paket =======
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y xdotool unclutter coreutils sed dbus-x11
 
+# Hitta/Installera Chromium
 CHROME_BIN=""
 for c in /usr/bin/chromium-browser /usr/bin/chromium /snap/bin/chromium; do
   [[ -x "$c" ]] && CHROME_BIN="$c" && break
@@ -82,7 +86,7 @@ if [[ -z "$CHROME_BIN" ]]; then
 fi
 echo "==> Chromium: $CHROME_BIN"
 
-# ======= Kiosk- och watchdog-script =======
+# ======= Script: kiosk + watchdog =======
 PROFILE_DIR="${USER_HOME}/.config/chromium"
 KIOSK_SH="${USER_HOME}/kiosk.sh"
 WATCHDOG_SH="${USER_HOME}/chrome_watchdog.sh"
@@ -102,7 +106,7 @@ PROFILE_DIR="${PROFILE_DIR}"
 export DISPLAY XAUTHORITY
 export XDG_RUNTIME_DIR="/run/user/\$(id -u ${PI_USER})"
 
-# Vänta tills X-session är igång
+# Vänta tills X/X11-session är igång
 for i in {1..60}; do xset q >/dev/null 2>&1 && break; sleep 1; done
 
 # Stäng av skärmsläckning/DPMS
@@ -197,7 +201,7 @@ Type=simple
 ExecStart=${KIOSK_SH}
 Restart=always
 RestartSec=2
-# Öka /dev/shm – motverkar "Aw, Snap!" vid minnesbrist
+# Större /dev/shm motverkar "Aw, Snap!" vid minnesbrist
 TemporaryFileSystem=/dev/shm:rw,nosuid,nodev,mode=1777,size=128M
 KillMode=control-group
 
@@ -225,7 +229,7 @@ Environment=XAUTHORITY=${USER_HOME}/.Xauthority
 WantedBy=graphical.target
 EOF
 
-# (Valfritt) Daglig soft refresh
+# (Valfritt) Daglig soft reload (F5) 04:30
 REFRESH_SERVICE="/etc/systemd/system/kiosk-refresh.service"
 REFRESH_TIMER="/etc/systemd/system/kiosk-refresh.timer"
 cat > "${REFRESH_SERVICE}" <<EOF
@@ -273,4 +277,3 @@ $ENABLE_REFRESH_TIMER && echo "     systemctl status kiosk-refresh.timer"
 echo
 echo "   Ändra URL framöver:"
 echo "     sudo sed -i \"s#^KIOSK_URL=.*#KIOSK_URL=\\\"${KIOSK_URL}\\\"#\" ${KIOSK_SH} && sudo systemctl restart kiosk.service"
-
