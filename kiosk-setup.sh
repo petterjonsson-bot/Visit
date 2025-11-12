@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# setup-kiosk.sh – One-shot install för Chromium-kiosk med watchdog
+# setup-kiosk.sh – One-shot install för Chromium-kiosk med WATCHDOG (safe)
 # Usage:
 #   sudo ./kiosk-setup.sh [--url URL] [--user <user>] [--mode stable|fast|ultra] [--no-refresh]
-#   Modes:
-#     stable (default):  GPU off  (disable-gpu, raster off)  <- rekommenderad
-#     fast:              GPU on   (Chromiums standard)
-#     ultra:             SwiftShader mjukvaru-GL (max stabilitet)
+# Modes:
+#   stable (default): GPU off (disable-gpu, raster off) – mest stabil
+#   fast:             GPU on  (Chromiums standard)
+#   ultra:            SwiftShader mjukvaru-GL – max stabilitet
 
 set -euo pipefail
 
-# --- Se till att köra med bash och inte sh ---
+# Kör med bash om vi råkar startas via sh
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
 fi
 
-# --- CRLF-koll: endast om $0 är läsbar fil (inte stdin) ---
+# CRLF-koll: endast om skriptet körs från en läsbar fil (inte via stdin)
 if [ -r "$0" ] && grep -q $'\r' "$0" 2>/dev/null; then
   echo "[setup-kiosk] Upptäckte CRLF – fixar..."
   tmp="$(mktemp)"
@@ -23,7 +23,7 @@ if [ -r "$0" ] && grep -q $'\r' "$0" 2>/dev/null; then
   exec bash "$tmp" "$@"
 fi
 
-# --- Auto-sudo ---
+# Auto-sudo
 if [ "$(id -u)" -ne 0 ]; then
   exec sudo -E bash "$0" "$@"
 fi
@@ -57,13 +57,13 @@ if ! id -u "${PI_USER}" >/dev/null 2>&1; then
 fi
 USER_HOME=$(eval echo "~${PI_USER}")
 
-# ======= Försök aktivera autologin & X11 om möjligt (hoppa över annars) =======
+# ======= Autologin/X11 (försök – hoppa över om ej tillgängligt) =======
 if command -v raspi-config >/dev/null 2>&1; then
   if raspi-config nonint help 2>/dev/null | grep -q 'do_boot_behaviour'; then
-    raspi-config nonint do_boot_behaviour B4 || true  # Autologin to desktop
+    raspi-config nonint do_boot_behaviour B4 || true  # Autologin desktop
   fi
   if raspi-config nonint help 2>/dev/null | grep -q 'do_wayland'; then
-    raspi-config nonint do_wayland 1 || true          # Försök X11 (1) istället för Wayland
+    raspi-config nonint do_wayland 1 || true          # Försök X11
   fi
 fi
 
@@ -105,7 +105,7 @@ case "$MODE" in
     echo "Ogiltigt --mode: $MODE (tillåtna: stable|fast|ultra)"; exit 1 ;;
 esac
 
-# Alltid tysta kamera/mikrofon-portalen (onödig i kiosk)
+# Tysta kamera/mikrofon-portalen (onödig i kiosk)
 MEDIA_FLAG="--use-fake-ui-for-media-stream"
 
 # ======= Script: kiosk + watchdog =======
@@ -155,6 +155,7 @@ EOF
 chown "${PI_USER}:${PI_USER}" "${KIOSK_SH}"
 chmod +x "${KIOSK_SH}"
 
+# Ny, säker watchdog (ingen 60s-studs – omstart bara vid verkligt fel)
 cat > "${WATCHDOG_SH}" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -163,42 +164,46 @@ XAUTHORITY="$HOME/.Xauthority"
 export DISPLAY XAUTHORITY
 
 SNAP_PATTERNS=("Aw, Snap!" "He's dead, Jim!" "Åh nej!" "Oh no!")
-BLANK_HANG_SECONDS=60
-LAST_TITLE=""
-LAST_CHANGE=$(date +%s)
+NO_WIN_TIMEOUT=30   # om inget Chromium-fönster hittas på >30s -> omstart
+MISSING_SINCE=0
 
 while true; do
   WIN_IDS=$(xdotool search --onlyvisible --class "chromium-browser" 2>/dev/null || \
             xdotool search --onlyvisible --class "chromium" 2>/dev/null || true)
+
   if [ -z "${WIN_IDS}" ]; then
-    sleep 10
+    # Inget fönster – räkna
+    if [ "$MISSING_SINCE" -eq 0 ]; then
+      MISSING_SINCE=$(date +%s)
+    else
+      NOW=$(date +%s)
+      if (( NOW - MISSING_SINCE > NO_WIN_TIMEOUT )); then
+        echo "[watchdog] Inget Chromium-fönster > ${NO_WIN_TIMEOUT}s -> omstart"
+        pkill -f chromium || pkill -f chromium-browser || true
+        sleep 3
+        MISSING_SINCE=0
+      fi
+    fi
+    sleep 5
     continue
   fi
+
+  # Fönster finns – nollställ
+  MISSING_SINCE=0
+
+  # Titta på titel för kända felrutor
   WIN_ID=$(echo "${WIN_IDS}" | head -n1)
   TITLE=$(xdotool getwindowname "${WIN_ID}" 2>/dev/null || echo "")
-
   for p in "${SNAP_PATTERNS[@]}"; do
     if [[ "${TITLE}" == *"${p}"* ]]; then
-      echo "[watchdog] Hittade '${p}' -> omstart"
+      echo "[watchdog] Upptäckte '${p}' -> omstart"
       pkill -f chromium || pkill -f chromium-browser || true
       sleep 3
       break
     fi
   done
 
-  NOW=$(date +%s)
-  if [[ -n "${TITLE}" && "${TITLE}" != "${LAST_TITLE}" ]]; then
-    LAST_TITLE="${TITLE}"
-    LAST_CHANGE="${NOW}"
-  fi
-  if (( NOW - LAST_CHANGE > BLANK_HANG_SECONDS )); then
-    echo "[watchdog] Titel oförändrad > ${BLANK_HANG_SECONDS}s ('${TITLE}') -> omstart"
-    pkill -f chromium || pkill -f chromium-browser || true
-    sleep 3
-    LAST_CHANGE="${NOW}"
-    LAST_TITLE=""
-  fi
-  sleep 15
+  sleep 10
 done
 EOF
 chown "${PI_USER}:${PI_USER}" "${WATCHDOG_SH}"
