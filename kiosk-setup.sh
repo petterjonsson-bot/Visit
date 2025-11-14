@@ -220,34 +220,26 @@ while true; do
     fi
   done
 
-  # 2) Vit/svart-rute-detektering via skärmdump (om ImageMagick finns)
-  if have_imagemagick; then
-    NOW=$(date +%s)
-    if (( NOW - LAST_SNAPSHOT_CHECK >= SNAPSHOT_INTERVAL )); then
-      LAST_SNAPSHOT_CHECK=$NOW
+          # 2) Vit/svart-rute-detektering via skärmdump (om ImageMagick finns)
+          if have_imagemagick; then
+            NOW=$(date +%s)
+            if (( NOW - LAST_SNAPSHOT_CHECK >= SNAPSHOT_INTERVAL )); then
+              LAST_SNAPSHOT_CHECK=$NOW
 
-      # Ta en nedskalad skärmdump för att minimera CPU-last
-      if import -silent -window "${WIN_ID}" -resize 320x180 "${SNAPSHOT_FILE}" >/dev/null 2>&1; then
-        mean=$(convert "${SNAPSHOT_FILE}" -colorspace Gray -format "%[fx:mean]" info: 2>/dev/null || echo "")
-        if [[ -n "${mean}" ]]; then
-          # mean är ett flyttal 0..1 där 0=svart, 1=vit
-          if awk -v m="${mean}" 'BEGIN{exit !(m>=0.97 || m<=0.03)}'; then
-            # Nästan helt vit eller svart bild
-            ((SUSPECT_COUNT++))
-            echo "[watchdog] Misstänkt vit/svart ruta (mean=${mean}, count=${SUSPECT_COUNT}/${SUSPECT_LIMIT})"
-          else
-            SUSPECT_COUNT=0
-          fi
-
-          if (( SUSPECT_COUNT >= SUSPECT_LIMIT )); then
-            echo "[watchdog] Skärmen verkar vit/svart under längre tid – omstart av Chromium"
-            pkill -f chromium || pkill -f chromium-browser || true
-            sleep 3
-            SUSPECT_COUNT=0
-            continue
+        # Ta en nedskalad skärmdump för att minimera CPU-last
+        if import -silent -window "${WIN_ID}" -resize 320x180 "${SNAPSHOT_FILE}" >/dev/null 2>&1; then
+          mean=$(convert "${SNAPSHOT_FILE}" -colorspace Gray -format "%[fx:mean]" info: 2>/dev/null || echo "")
+          if [[ -n "${mean}" ]]; then
+            # mean är ett flyttal 0..1 där 0=svart, 1=vit
+            if awk -v m="${mean}" 'BEGIN{exit !(m>=0.97)}'; then
+              # Nästan helt vit bild
+              ((SUSPECT_COUNT++))
+              echo "[watchdog] Misstänkt vit ruta (mean=${mean}, count=${SUSPECT_COUNT}/${SUSPECT_LIMIT})"
+            else
+              SUSPECT_COUNT=0
+            fi
           fi
         fi
-      fi
     fi
   fi
 
