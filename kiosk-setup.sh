@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup-kiosk.sh – One-shot install för Chromium-kiosk med WATCHDOG (safe)
+# setup-kiosk.sh – One-shot install för Chromium-kiosk med ENHANCED WATCHDOG
 # Usage:
 #   sudo ./kiosk-setup.sh [--url URL] [--user <user>] [--mode stable|fast|ultra] [--no-refresh]
 # Modes:
@@ -69,7 +69,8 @@ fi
 
 # ======= Paket =======
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y xdotool unclutter coreutils sed dbus-x11
+DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  xdotool unclutter coreutils sed dbus-x11 imagemagick
 
 # Chromium (hantera olika binärnamn)
 CHROME_BIN=""
@@ -125,6 +126,9 @@ PROFILE_DIR="${PROFILE_DIR}"
 export DISPLAY XAUTHORITY
 export XDG_RUNTIME_DIR="/run/user/\$(id -u ${PI_USER})"
 
+# Se till att runtime-dir finns
+mkdir -p "\${XDG_RUNTIME_DIR}" || true
+
 # Vänta tills X-session är igång
 for i in {1..60}; do xset q >/dev/null 2>&1 && break; sleep 1; done
 
@@ -155,7 +159,7 @@ EOF
 chown "${PI_USER}:${PI_USER}" "${KIOSK_SH}"
 chmod +x "${KIOSK_SH}"
 
-# Ny, säker watchdog (ingen 60s-studs – omstart bara vid verkligt fel)
+# ======= ENHANCED WATCHDOG: process + Aw Snap + vit/svart ruta =======
 cat > "${WATCHDOG_SH}" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -164,15 +168,25 @@ XAUTHORITY="$HOME/.Xauthority"
 export DISPLAY XAUTHORITY
 
 SNAP_PATTERNS=("Aw, Snap!" "He's dead, Jim!" "Åh nej!" "Oh no!")
-NO_WIN_TIMEOUT=30   # om inget Chromium-fönster hittas på >30s -> omstart
+NO_WIN_TIMEOUT=30           # om inget Chromium-fönster hittas på >30s -> omstart
 MISSING_SINCE=0
+
+SNAPSHOT_INTERVAL=30        # sekunder mellan skärmdumpskontroller
+LAST_SNAPSHOT_CHECK=0
+SUSPECT_COUNT=0             # hur många gånger i rad vi sett vit/svart bild
+SUSPECT_LIMIT=3             # efter t.ex. 3 mätningar i rad -> omstart
+SNAPSHOT_FILE="/tmp/kiosk_watchdog_capture.png"
+
+have_imagemagick() {
+  command -v import >/dev/null 2>&1 && command -v convert >/dev/null 2>&1
+}
 
 while true; do
   WIN_IDS=$(xdotool search --onlyvisible --class "chromium-browser" 2>/dev/null || \
             xdotool search --onlyvisible --class "chromium" 2>/dev/null || true)
 
   if [ -z "${WIN_IDS}" ]; then
-    # Inget fönster – räkna
+    # Inget Chromium-fönster – mät hur länge
     if [ "$MISSING_SINCE" -eq 0 ]; then
       MISSING_SINCE=$(date +%s)
     else
@@ -182,26 +196,60 @@ while true; do
         pkill -f chromium || pkill -f chromium-browser || true
         sleep 3
         MISSING_SINCE=0
+        SUSPECT_COUNT=0
       fi
     fi
     sleep 5
     continue
   fi
 
-  # Fönster finns – nollställ
+  # Fönster finns – nollställ "missing"
   MISSING_SINCE=0
 
-  # Titta på titel för kända felrutor
   WIN_ID=$(echo "${WIN_IDS}" | head -n1)
   TITLE=$(xdotool getwindowname "${WIN_ID}" 2>/dev/null || echo "")
+
+  # 1) Titta på titel för kända felrutor (Aw, Snap mm)
   for p in "${SNAP_PATTERNS[@]}"; do
     if [[ "${TITLE}" == *"${p}"* ]]; then
-      echo "[watchdog] Upptäckte '${p}' -> omstart"
+      echo "[watchdog] Upptäckte felruta '${p}' (titel: '${TITLE}') -> omstart"
       pkill -f chromium || pkill -f chromium-browser || true
       sleep 3
-      break
+      SUSPECT_COUNT=0
+      continue 2
     fi
   done
+
+  # 2) Vit/svart-rute-detektering via skärmdump (om ImageMagick finns)
+  if have_imagemagick; then
+    NOW=$(date +%s)
+    if (( NOW - LAST_SNAPSHOT_CHECK >= SNAPSHOT_INTERVAL )); then
+      LAST_SNAPSHOT_CHECK=$NOW
+
+      # Ta en nedskalad skärmdump för att minimera CPU-last
+      if import -silent -window "${WIN_ID}" -resize 320x180 "${SNAPSHOT_FILE}" >/dev/null 2>&1; then
+        mean=$(convert "${SNAPSHOT_FILE}" -colorspace Gray -format "%[fx:mean]" info: 2>/dev/null || echo "")
+        if [[ -n "${mean}" ]]; then
+          # mean är ett flyttal 0..1 där 0=svart, 1=vit
+          if awk -v m="${mean}" 'BEGIN{exit !(m>=0.97 || m<=0.03)}'; then
+            # Nästan helt vit eller svart bild
+            ((SUSPECT_COUNT++))
+            echo "[watchdog] Misstänkt vit/svart ruta (mean=${mean}, count=${SUSPECT_COUNT}/${SUSPECT_LIMIT})"
+          else
+            SUSPECT_COUNT=0
+          fi
+
+          if (( SUSPECT_COUNT >= SUSPECT_LIMIT )); then
+            echo "[watchdog] Skärmen verkar vit/svart under längre tid – omstart av Chromium"
+            pkill -f chromium || pkill -f chromium-browser || true
+            sleep 3
+            SUSPECT_COUNT=0
+            continue
+          fi
+        fi
+      fi
+    fi
+  fi
 
   sleep 10
 done
@@ -236,7 +284,7 @@ EOF
 WATCHDOG_SERVICE="/etc/systemd/system/chrome-watchdog.service"
 cat > "${WATCHDOG_SERVICE}" <<EOF
 [Unit]
-Description=Chromium Watchdog
+Description=Chromium Watchdog (enhanced)
 After=kiosk.service
 Requires=kiosk.service
 
