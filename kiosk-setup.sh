@@ -35,7 +35,7 @@ MODE="stable"                # stable|fast|ultra
 ENABLE_REFRESH_TIMER=true    # daglig F5 04:30
 
 # ======= Argument =======
-while [[ $# -gt 0 ]]; do
+while [[ $# > 0 ]]; do
   case "$1" in
     --url)        KIOSK_URL="$2"; shift 2 ;;
     --user)       PI_USER="$2"; shift 2 ;;
@@ -117,6 +117,7 @@ WATCHDOG_SH="${USER_HOME}/chrome_watchdog.sh"
 cat > "${KIOSK_SH}" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+
 KIOSK_URL="${KIOSK_URL}"
 CHROME_BIN="${CHROME_BIN}"
 DISPLAY=":0"
@@ -159,10 +160,13 @@ EOF
 chown "${PI_USER}:${PI_USER}" "${KIOSK_SH}"
 chmod +x "${KIOSK_SH}"
 
-# ======= ENHANCED WATCHDOG: process + Aw Snap + vit/svart ruta =======
+# ======= ENHANCED WATCHDOG: process + Aw Snap + vit ruta =======
 cat > "${WATCHDOG_SH}" <<'EOF'
 #!/usr/bin/env bash
-set -euo pipefail
+# Robust watchdog – dör inte av småfel, triggar restart vid vit ruta
+
+set -o pipefail
+
 DISPLAY=":0"
 XAUTHORITY="$HOME/.Xauthority"
 export DISPLAY XAUTHORITY
@@ -173,7 +177,7 @@ MISSING_SINCE=0
 
 SNAPSHOT_INTERVAL=30        # sekunder mellan skärmdumpskontroller
 LAST_SNAPSHOT_CHECK=0
-SUSPECT_COUNT=0             # hur många gånger i rad vi sett vit/svart bild
+SUSPECT_COUNT=0             # hur många gånger i rad vi sett vit bild
 SUSPECT_LIMIT=3             # efter t.ex. 3 mätningar i rad -> omstart
 SNAPSHOT_FILE="/tmp/kiosk_watchdog_capture.png"
 
@@ -181,9 +185,20 @@ have_imagemagick() {
   command -v import >/dev/null 2>&1 && command -v convert >/dev/null 2>&1
 }
 
+log() {
+  echo "[watchdog] $*"
+}
+
 while true; do
+  # Om xdotool saknas (konstig miljö) – vänta och försök igen senare
+  if ! command -v xdotool >/dev/null 2>&1; then
+    log "xdotool saknas – sover 60s"
+    sleep 60
+    continue
+  fi
+
   WIN_IDS=$(xdotool search --onlyvisible --class "chromium-browser" 2>/dev/null || \
-            xdotool search --onlyvisible --class "chromium" 2>/dev/null || true)
+            xdotool search --onlyvisible --class "chromium" 2>/dev/null || echo "")
 
   if [ -z "${WIN_IDS}" ]; then
     # Inget Chromium-fönster – mät hur länge
@@ -192,9 +207,9 @@ while true; do
     else
       NOW=$(date +%s)
       if (( NOW - MISSING_SINCE > NO_WIN_TIMEOUT )); then
-        echo "[watchdog] Inget Chromium-fönster > ${NO_WIN_TIMEOUT}s -> omstart"
+        log "Inget Chromium-fönster > ${NO_WIN_TIMEOUT}s -> pkill"
         pkill -f chromium || pkill -f chromium-browser || true
-        sleep 3
+        sleep 5
         MISSING_SINCE=0
         SUSPECT_COUNT=0
       fi
@@ -212,34 +227,41 @@ while true; do
   # 1) Titta på titel för kända felrutor (Aw, Snap mm)
   for p in "${SNAP_PATTERNS[@]}"; do
     if [[ "${TITLE}" == *"${p}"* ]]; then
-      echo "[watchdog] Upptäckte felruta '${p}' (titel: '${TITLE}') -> omstart"
+      log "Upptäckte felruta '${p}' (titel: '${TITLE}') -> pkill"
       pkill -f chromium || pkill -f chromium-browser || true
-      sleep 3
+      sleep 5
       SUSPECT_COUNT=0
       continue 2
     fi
   done
 
-          # 2) Vit/svart-rute-detektering via skärmdump (om ImageMagick finns)
-          if have_imagemagick; then
-            NOW=$(date +%s)
-            if (( NOW - LAST_SNAPSHOT_CHECK >= SNAPSHOT_INTERVAL )); then
-              LAST_SNAPSHOT_CHECK=$NOW
+  # 2) Vit-rute-detektering via skärmdump (om ImageMagick finns)
+  if have_imagemagick; then
+    NOW=$(date +%s)
+    if (( NOW - LAST_SNAPSHOT_CHECK >= SNAPSHOT_INTERVAL )); then
+      LAST_SNAPSHOT_CHECK=$NOW
 
-        # Ta en nedskalad skärmdump för att minimera CPU-last
-        if import -silent -window "${WIN_ID}" -resize 320x180 "${SNAPSHOT_FILE}" >/dev/null 2>&1; then
-          mean=$(convert "${SNAPSHOT_FILE}" -colorspace Gray -format "%[fx:mean]" info: 2>/dev/null || echo "")
-          if [[ -n "${mean}" ]]; then
-            # mean är ett flyttal 0..1 där 0=svart, 1=vit
-            if awk -v m="${mean}" 'BEGIN{exit !(m>=0.97)}'; then
-              # Nästan helt vit bild
-              ((SUSPECT_COUNT++))
-              echo "[watchdog] Misstänkt vit ruta (mean=${mean}, count=${SUSPECT_COUNT}/${SUSPECT_LIMIT})"
-            else
-              SUSPECT_COUNT=0
-            fi
+      # Ta en nedskalad skärmdump för att minimera CPU-last
+      if import -silent -window "${WIN_ID}" -resize 320x180 "${SNAPSHOT_FILE}" >/dev/null 2>&1; then
+        mean=$(convert "${SNAPSHOT_FILE}" -colorspace Gray -format "%[fx:mean]" info: 2>/dev/null || echo "")
+        if [[ -n "${mean}" ]]; then
+          # mean är ett flyttal 0..1 där 0=svart, 1=vit
+          if awk -v m="${mean}" 'BEGIN{exit !(m>=0.97)}'; then
+            # Nästan helt vit bild
+            ((SUSPECT_COUNT++))
+            log "Misstänkt vit ruta (mean=${mean}, count=${SUSPECT_COUNT}/${SUSPECT_LIMIT})"
+          else
+            SUSPECT_COUNT=0
+          fi
+
+          if (( SUSPECT_COUNT >= SUSPECT_LIMIT )); then
+            log "Vit ruta detekterad ${SUSPECT_COUNT} ggr i rad -> pkill"
+            pkill -f chromium || pkill -f chromium-browser || true
+            sleep 5
+            SUSPECT_COUNT=0
           fi
         fi
+      fi
     fi
   fi
 
@@ -285,7 +307,7 @@ User=${PI_USER}
 Type=simple
 ExecStart=${WATCHDOG_SH}
 Restart=always
-RestartSec=2
+RestartSec=5
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=${USER_HOME}/.Xauthority
 
