@@ -9,7 +9,6 @@
 
 set -euo pipefail
 
-# Kör med bash om vi råkar startas via sh
 if [ -z "${BASH_VERSION:-}" ]; then
   exec bash "$0" "$@"
 fi
@@ -31,8 +30,8 @@ fi
 # ======= Standardvärden =======
 KIOSK_URL="https://int1.visitlinkoping.se/spot"
 PI_USER="${SUDO_USER:-${USER:-pi}}"
-MODE="stable"                # stable|fast|ultra
-ENABLE_REFRESH_TIMER=true    # daglig F5 04:30
+MODE="stable"                
+ENABLE_REFRESH_TIMER=true    
 
 # ======= Argument =======
 while [[ $# > 0 ]]; do
@@ -60,10 +59,10 @@ USER_HOME=$(eval echo "~${PI_USER}")
 # ======= Autologin/X11 (försök – hoppa över om ej tillgängligt) =======
 if command -v raspi-config >/dev/null 2>&1; then
   if raspi-config nonint help 2>/dev/null | grep -q 'do_boot_behaviour'; then
-    raspi-config nonint do_boot_behaviour B4 || true  # Autologin desktop
+    raspi-config nonint do_boot_behaviour B4 || true  
   fi
   if raspi-config nonint help 2>/dev/null | grep -q 'do_wayland'; then
-    raspi-config nonint do_wayland 1 || true          # Försök X11
+    raspi-config nonint do_wayland 1 || true          
   fi
 fi
 
@@ -97,7 +96,7 @@ case "$MODE" in
     GPU_FLAG="--disable-gpu --disable-accelerated-2d-canvas --disable-gpu-rasterization"
     ;;
   fast)
-    GPU_FLAG=""  # standard: låt Chromium använda GPU
+    GPU_FLAG="" 
     ;;
   ultra)
     GPU_FLAG="--use-gl=swiftshader --disable-accelerated-video-decode --disable-gpu-rasterization"
@@ -106,7 +105,6 @@ case "$MODE" in
     echo "Ogiltigt --mode: $MODE (tillåtna: stable|fast|ultra)"; exit 1 ;;
 esac
 
-# Tysta kamera/mikrofon-portalen (onödig i kiosk)
 MEDIA_FLAG="--use-fake-ui-for-media-stream"
 
 # ======= Script: kiosk + watchdog =======
@@ -123,6 +121,9 @@ CHROME_BIN="${CHROME_BIN}"
 DISPLAY=":0"
 XAUTHORITY="${USER_HOME}/.Xauthority"
 PROFILE_DIR="${PROFILE_DIR}"
+LOG_FILE="${PROFILE_DIR}/kiosk-chrome.log"
+
+mkdir -p "${PROFILE_DIR}" || true
 
 export DISPLAY XAUTHORITY
 export XDG_RUNTIME_DIR="/run/user/\$(id -u ${PI_USER})"
@@ -149,11 +150,11 @@ CHROME_FLAGS="--kiosk --noerrdialogs --disable-session-crashed-bubble --disable-
  --user-data-dir=\${PROFILE_DIR} --app=\${KIOSK_URL}"
 
 while true; do
-  rm -f "\${PROFILE_DIR}/SingletonLock" "\${PROFILE_DIR}/SingletonCookie" 2>/dev/null || true
-  "\${CHROME_BIN}" \${CHROME_FLAGS} &
-  CH_PID=\$!
-  wait \$CH_PID
-  echo "[kiosk.sh] Chromium dog (kod \$?) – omstart om 2s..."
+  rm -f "${PROFILE_DIR}/SingletonLock" "${PROFILE_DIR}/SingletonCookie" 2>/dev/null || true
+  "${CHROME_BIN}" ${CHROME_FLAGS} >>"${LOG_FILE}" 2>&1 &
+  CH_PID=$!
+  wait $CH_PID
+  echo "[kiosk.sh] Chromium dog (kod $?) – omstart om 2s..."
   sleep 2
 done
 EOF
@@ -315,7 +316,7 @@ Environment=XAUTHORITY=${USER_HOME}/.Xauthority
 WantedBy=graphical.target
 EOF
 
-# (Valfritt) Daglig soft reload 04:30
+# Daglig soft reload 04:30
 REFRESH_SERVICE="/etc/systemd/system/kiosk-refresh.service"
 REFRESH_TIMER="/etc/systemd/system/kiosk-refresh.timer"
 cat > "${REFRESH_SERVICE}" <<EOF
@@ -363,3 +364,4 @@ $ENABLE_REFRESH_TIMER && echo "     systemctl status kiosk-refresh.timer"
 echo
 echo "   Ändra URL:"
 echo "     sudo sed -i \"s#^KIOSK_URL=.*#KIOSK_URL=\\\"${KIOSK_URL}\\\"#\" ${KIOSK_SH} && sudo systemctl restart kiosk.service"
+
