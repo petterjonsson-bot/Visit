@@ -121,7 +121,7 @@ CHROME_BIN="${CHROME_BIN}"
 DISPLAY=":0"
 XAUTHORITY="${USER_HOME}/.Xauthority"
 PROFILE_DIR="${PROFILE_DIR}"
-LOG_FILE="${PROFILE_DIR}/kiosk-chrome.log"
+LOG_DEST="${PROFILE_DIR}/kiosk-chrome.log"
 
 mkdir -p "${PROFILE_DIR}" || true
 
@@ -151,12 +151,13 @@ CHROME_FLAGS="--kiosk --noerrdialogs --disable-session-crashed-bubble --disable-
 
 while true; do
   rm -f "${PROFILE_DIR}/SingletonLock" "${PROFILE_DIR}/SingletonCookie" 2>/dev/null || true
-  "${CHROME_BIN}" \${CHROME_FLAGS} >>"${LOG_DEST}" 2>&1 &
+  "${CHROME_BIN}" \${CHROME_FLAGS} >>"\$LOG_DEST" 2>&1 &
   CH_PID=$!
   wait $CH_PID
   echo "[kiosk.sh] Chromium dog (kod $?) – omstart om 2s..."
   sleep 2
 done
+
 EOF
 chown "${PI_USER}:${PI_USER}" "${KIOSK_SH}"
 chmod +x "${KIOSK_SH}"
@@ -364,6 +365,7 @@ $ENABLE_REFRESH_TIMER && echo "     systemctl status kiosk-refresh.timer"
 echo
 echo "   Ändra URL:"
 echo "     sudo sed -i \"s#^KIOSK_URL=.*#KIOSK_URL=\\\"${KIOSK_URL}\\\"#\" ${KIOSK_SH} && sudo systemctl restart kiosk.service"
+
 
 
 
