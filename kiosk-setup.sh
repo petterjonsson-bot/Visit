@@ -30,8 +30,8 @@ fi
 # ======= Standardvärden =======
 KIOSK_URL="https://int1.visitlinkoping.se/spot"
 PI_USER="${SUDO_USER:-${USER:-pi}}"
-MODE="stable"                
-ENABLE_REFRESH_TIMER=true    
+MODE="stable"                # stable|fast|ultra
+ENABLE_REFRESH_TIMER=true    # daglig F5 04:30
 
 # ======= Argument =======
 while [[ $# > 0 ]]; do
@@ -59,10 +59,10 @@ USER_HOME=$(eval echo "~${PI_USER}")
 # ======= Autologin/X11 (försök – hoppa över om ej tillgängligt) =======
 if command -v raspi-config >/dev/null 2>&1; then
   if raspi-config nonint help 2>/dev/null | grep -q 'do_boot_behaviour'; then
-    raspi-config nonint do_boot_behaviour B4 || true  
+    raspi-config nonint do_boot_behaviour B4 || true  # Console Autologin
   fi
   if raspi-config nonint help 2>/dev/null | grep -q 'do_wayland'; then
-    raspi-config nonint do_wayland 1 || true          
+    raspi-config nonint do_wayland 1 || true          # X11 (inte Wayland)
   fi
 fi
 
@@ -96,7 +96,7 @@ case "$MODE" in
     GPU_FLAG="--disable-gpu --disable-accelerated-2d-canvas --disable-gpu-rasterization"
     ;;
   fast)
-    GPU_FLAG="" 
+    GPU_FLAG=""  # standard
     ;;
   ultra)
     GPU_FLAG="--use-gl=swiftshader --disable-accelerated-video-decode --disable-gpu-rasterization"
@@ -121,9 +121,9 @@ CHROME_BIN="${CHROME_BIN}"
 DISPLAY=":0"
 XAUTHORITY="${USER_HOME}/.Xauthority"
 PROFILE_DIR="${PROFILE_DIR}"
-LOG_DEST="${PROFILE_DIR}/kiosk-chrome.log"
+LOG_DEST="\${PROFILE_DIR}/kiosk-chrome.log"
 
-mkdir -p "${PROFILE_DIR}" || true
+mkdir -p "\${PROFILE_DIR}" || true
 
 export DISPLAY XAUTHORITY
 export XDG_RUNTIME_DIR="/run/user/\$(id -u ${PI_USER})"
@@ -150,11 +150,11 @@ CHROME_FLAGS="--kiosk --noerrdialogs --disable-session-crashed-bubble --disable-
  --user-data-dir=\${PROFILE_DIR} --app=\${KIOSK_URL}"
 
 while true; do
-  rm -f "${PROFILE_DIR}/SingletonLock" "${PROFILE_DIR}/SingletonCookie" 2>/dev/null || true
-  "${CHROME_BIN}" \${CHROME_FLAGS} >>"\$LOG_DEST" 2>&1 &
-  CH_PID=$!
-  wait $CH_PID
-  echo "[kiosk.sh] Chromium dog (kod $?) – omstart om 2s..."
+  rm -f "\${PROFILE_DIR}/SingletonLock" "\${PROFILE_DIR}/SingletonCookie" 2>/dev/null || true
+  "\${CHROME_BIN}" \${CHROME_FLAGS} >>"\${LOG_DEST}" 2>&1 &
+  CH_PID=\$!
+  wait "\$CH_PID"
+  echo "[kiosk.sh] Chromium dog (kod \$?) – omstart om 2s..."
   sleep 2
 done
 
@@ -365,7 +365,3 @@ $ENABLE_REFRESH_TIMER && echo "     systemctl status kiosk-refresh.timer"
 echo
 echo "   Ändra URL:"
 echo "     sudo sed -i \"s#^KIOSK_URL=.*#KIOSK_URL=\\\"${KIOSK_URL}\\\"#\" ${KIOSK_SH} && sudo systemctl restart kiosk.service"
-
-
-
-
