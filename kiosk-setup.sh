@@ -108,7 +108,9 @@ esac
 MEDIA_FLAG="--use-fake-ui-for-media-stream"
 
 # ======= Script: kiosk + watchdog =======
-PROFILE_DIR="${USER_HOME}/.config/chromium"
+# ÄNDRING: använd dedikerad profil för Blocks så ID aldrig blandas / tappas
+PROFILE_DIR="${USER_HOME}/.config/chromium-blocks"
+
 KIOSK_SH="${USER_HOME}/kiosk.sh"
 WATCHDOG_SH="${USER_HOME}/chrome_watchdog.sh"
 
@@ -123,13 +125,24 @@ XAUTHORITY="${USER_HOME}/.Xauthority"
 PROFILE_DIR="${PROFILE_DIR}"
 LOG_DEST="\${PROFILE_DIR}/kiosk-chrome.log"
 
-mkdir -p "\${PROFILE_DIR}" || true
+# ÄNDRING: separata cache-kataloger i profilen (undviker fallbacks)
+CACHE_DIR="\${PROFILE_DIR}/cache"
+DISK_CACHE_DIR="\${PROFILE_DIR}/disk-cache"
+
+mkdir -p "\${PROFILE_DIR}" "\${CACHE_DIR}" "\${DISK_CACHE_DIR}" || true
 
 export DISPLAY XAUTHORITY
 export XDG_RUNTIME_DIR="/run/user/\$(id -u ${PI_USER})"
 
 # Se till att runtime-dir finns
 mkdir -p "\${XDG_RUNTIME_DIR}" || true
+
+# Säkerställ att profilkatalogen är skrivbar (annars blir det "temporary profile")
+if ! touch "\${PROFILE_DIR}/.__write_test" 2>/dev/null; then
+  echo "[kiosk.sh] ERROR: Profile dir not writable: \${PROFILE_DIR}" | tee -a "\${LOG_DEST}"
+  exit 1
+fi
+rm -f "\${PROFILE_DIR}/.__write_test" 2>/dev/null || true
 
 # Vänta tills X-session är igång
 for i in {1..60}; do xset q >/dev/null 2>&1 && break; sleep 1; done
@@ -142,19 +155,38 @@ xset s noblank || true
 # Dölj muspekaren
 unclutter -idle 1 -root -grab >/dev/null 2>&1 &
 
+# ÄNDRING: "single owner" – döda andra kiosk-instanser som kan ge ny profil/nytt ID
+# Vi dödar bara Chromium som kör kiosk/app, för att inte störa ev. annan normal Chromium (om någon finns)
+kill_competing_chromium() {
+  # Döda chromium som kör --kiosk eller --app=...spot...
+  pkill -f "/usr/lib/chromium/chromium.*--kiosk" 2>/dev/null || true
+  pkill -f "/usr/lib/chromium/chromium.*--app=.*spot" 2>/dev/null || true
+  pkill -f "chromium-browser.*--kiosk" 2>/dev/null || true
+  pkill -f "chromium-browser.*--app=.*spot" 2>/dev/null || true
+}
+
 CHROME_FLAGS="--kiosk --noerrdialogs --disable-session-crashed-bubble --disable-translate \
  --no-first-run --fast --fast-start --simulate-outdated-no-au='Tue, 31 Dec 2099 23:59:59 GMT' \
  --autoplay-policy=no-user-gesture-required --overscroll-history-navigation=0 \
  --password-store=basic --disable-features=Translate,InfiniteSessionRestore \
  --enable-features=OverlayScrollbar ${GPU_FLAG} ${MEDIA_FLAG} \
- --user-data-dir=\${PROFILE_DIR} --app=\${KIOSK_URL}"
+ --user-data-dir=\${PROFILE_DIR} --profile-directory=Default \
+ --disk-cache-dir=\${DISK_CACHE_DIR} --data-path=\${CACHE_DIR} \
+ --app=\${KIOSK_URL}"
 
 while true; do
+  # Städa profil-lås (Chromium kan annars byta profil / misslyckas)
   rm -f "\${PROFILE_DIR}/SingletonLock" "\${PROFILE_DIR}/SingletonCookie" 2>/dev/null || true
+
+  # Se till att vi inte har en konkurrerande kiosk-uppstart
+  kill_competing_chromium
+  sleep 1
+  rm -f "\${PROFILE_DIR}/SingletonLock" "\${PROFILE_DIR}/SingletonCookie" 2>/dev/null || true
+
   "\${CHROME_BIN}" \${CHROME_FLAGS} >>"\${LOG_DEST}" 2>&1 &
   CH_PID=\$!
   wait "\$CH_PID"
-  echo "[kiosk.sh] Chromium dog (kod \$?) – omstart om 2s..."
+  echo "[kiosk.sh] Chromium dog (kod \$?) – omstart om 2s..." | tee -a "\${LOG_DEST}"
   sleep 2
 done
 
