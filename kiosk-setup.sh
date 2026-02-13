@@ -173,6 +173,7 @@ CHROME_FLAGS="--kiosk --noerrdialogs --disable-session-crashed-bubble --disable-
  --user-data-dir=\${PROFILE_DIR} --profile-directory=Default \
  --disk-cache-dir=\${DISK_CACHE_DIR} --data-path=\${CACHE_DIR} \
  --app=\${KIOSK_URL}"
+ --crash-dumps-dir="\${PROFILE_DIR}/Crash Reports"
 
 while true; do
   # Städa profil-lås (Chromium kan annars byta profil / misslyckas)
@@ -397,3 +398,4 @@ $ENABLE_REFRESH_TIMER && echo "     systemctl status kiosk-refresh.timer"
 echo
 echo "   Ändra URL:"
 echo "     sudo sed -i \"s#^KIOSK_URL=.*#KIOSK_URL=\\\"${KIOSK_URL}\\\"#\" ${KIOSK_SH} && sudo systemctl restart kiosk.service"
+
