@@ -69,7 +69,7 @@ fi
 # ======= Paket =======
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  xdotool unclutter coreutils sed dbus-x11 imagemagick
+  xdotool unclutter coreutils sed dbus-x11 imagemagick x11-xserver-utils
 
 # Chromium (hantera olika binärnamn)
 CHROME_BIN=""
@@ -172,10 +172,16 @@ CHROME_FLAGS="--kiosk --noerrdialogs --disable-session-crashed-bubble --disable-
  --enable-features=OverlayScrollbar ${GPU_FLAG} ${MEDIA_FLAG} \
  --user-data-dir=\${PROFILE_DIR} --profile-directory=Default \
  --disk-cache-dir=\${DISK_CACHE_DIR} --data-path=\${CACHE_DIR} \
- --app=\${KIOSK_URL}"
- --crash-dumps-dir="\${PROFILE_DIR}/Crash Reports"
+ --crash-dumps-dir=\${PROFILE_DIR}/CrashReports --app=\${KIOSK_URL}"
 
 while true; do
+  # Starta inte Chromium förrän X faktiskt är uppe
+  if ! xset q >/dev/null 2>&1; then
+    echo "[kiosk.sh] X-session ej redo på \${DISPLAY} – nytt försök om 5s" | tee -a "\${LOG_DEST}"
+    sleep 5
+    continue
+  fi
+
   # Städa profil-lås (Chromium kan annars byta profil / misslyckas)
   rm -f "\${PROFILE_DIR}/SingletonLock" "\${PROFILE_DIR}/SingletonCookie" 2>/dev/null || true
 
@@ -389,6 +395,22 @@ else
   systemctl disable --now kiosk-refresh.timer >/dev/null 2>&1 || true
 fi
 
+sleep 3
+if ! systemctl is-active --quiet kiosk.service; then
+  echo
+  echo "FEL: kiosk.service är inte aktiv efter installation."
+  systemctl --no-pager --full status kiosk.service || true
+  journalctl -u kiosk.service -n 80 --no-pager || true
+  exit 1
+fi
+if ! systemctl is-active --quiet chrome-watchdog.service; then
+  echo
+  echo "FEL: chrome-watchdog.service är inte aktiv efter installation."
+  systemctl --no-pager --full status chrome-watchdog.service || true
+  journalctl -u chrome-watchdog.service -n 80 --no-pager || true
+  exit 1
+fi
+
 echo
 echo "==> KLART!"
 echo "   Status:"
@@ -398,4 +420,3 @@ $ENABLE_REFRESH_TIMER && echo "     systemctl status kiosk-refresh.timer"
 echo
 echo "   Ändra URL:"
 echo "     sudo sed -i \"s#^KIOSK_URL=.*#KIOSK_URL=\\\"${KIOSK_URL}\\\"#\" ${KIOSK_SH} && sudo systemctl restart kiosk.service"
-
