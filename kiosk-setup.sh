@@ -19,7 +19,7 @@ NETWORKMANAGER_DROPIN="/etc/NetworkManager/conf.d/blocks-kiosk-wifi-powersave.co
 BOOT_WATCHDOG_BEGIN="# BEGIN blocks-kiosk watchdog"
 BOOT_WATCHDOG_END="# END blocks-kiosk watchdog"
 
-KIOSK_URL="https://int1.visitlinkoping.se/spot"
+KIOSK_URL="http://int1.visitlinkoping.se/spot"
 PI_USER=""
 MODE="stable"
 ID_MODE="profile"
