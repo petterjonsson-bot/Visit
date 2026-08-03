@@ -338,6 +338,11 @@ XAUTHORITY="$USER_HOME/.Xauthority"
 WAYLAND_DISPLAY="wayland-0"
 DISPLAY_NUMBER=":0"
 
+OS_VERSION_ID=""
+if [[ -r /etc/os-release ]]; then
+  OS_VERSION_ID="$(awk -F= '$1 == "VERSION_ID" { gsub(/"/, "", $2); print $2; exit }' /etc/os-release)"
+fi
+
 [[ -d "$USER_HOME" ]] || die "Hemkatalogen saknas: $USER_HOME"
 
 IS_RASPBERRY_PI=false
@@ -366,7 +371,12 @@ if $IS_RASPBERRY_PI && command -v raspi-config >/dev/null 2>&1; then
   SUDO_USER="$PI_USER" raspi-config nonint do_boot_behaviour B4 \
     || die "Kunde inte aktivera desktop-autologin med raspi-config."
 
-  if [[ "$DISPLAY_BACKEND" == "wayland" ]]; then
+  if [[ "$DISPLAY_BACKEND" == "wayland" && "$OS_VERSION_ID" =~ ^[0-9]+$ ]] \
+     && (( 10#$OS_VERSION_ID >= 13 )); then
+    command -v labwc >/dev/null 2>&1 \
+      || die "Raspberry Pi OS $OS_VERSION_ID använder Wayland som standard men labwc saknas. Installera Raspberry Pi OS with Desktop."
+    log "Raspberry Pi OS $OS_VERSION_ID använder labwc/Wayland som standard; ingen raspi-config-växling behövs."
+  elif [[ "$DISPLAY_BACKEND" == "wayland" ]]; then
     if ! SUDO_USER="$PI_USER" raspi-config nonint do_wayland W3; then
       warn "raspi-config accepterade inte W3; provar äldre Wayland-argumentet 0."
       SUDO_USER="$PI_USER" raspi-config nonint do_wayland 0 \
