@@ -367,11 +367,17 @@ if $IS_RASPBERRY_PI && command -v raspi-config >/dev/null 2>&1; then
     || die "Kunde inte aktivera desktop-autologin med raspi-config."
 
   if [[ "$DISPLAY_BACKEND" == "wayland" ]]; then
-    SUDO_USER="$PI_USER" raspi-config nonint do_wayland 0 \
-      || die "Kunde inte aktivera Wayland/labwc med raspi-config."
+    if ! SUDO_USER="$PI_USER" raspi-config nonint do_wayland W3; then
+      warn "raspi-config accepterade inte W3; provar äldre Wayland-argumentet 0."
+      SUDO_USER="$PI_USER" raspi-config nonint do_wayland 0 \
+        || die "Kunde inte aktivera Wayland/labwc med raspi-config."
+    fi
   else
-    SUDO_USER="$PI_USER" raspi-config nonint do_wayland 1 \
-      || die "Kunde inte aktivera X11 med raspi-config."
+    if ! SUDO_USER="$PI_USER" raspi-config nonint do_wayland W1; then
+      warn "raspi-config accepterade inte W1; provar äldre X11-argumentet 1."
+      SUDO_USER="$PI_USER" raspi-config nonint do_wayland 1 \
+        || die "Kunde inte aktivera X11 med raspi-config."
+    fi
   fi
 
   SUDO_USER="$PI_USER" raspi-config nonint do_blanking 1 \
