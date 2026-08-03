@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # kiosk-setup.sh - installs a resilient PIXILAB Blocks Chromium kiosk on Raspberry Pi OS
 # shellcheck shell=bash
+# Must remain one physical line: the trailing CR is ignored as part of the comment when a CRLF copy is run with bash.
+grep -q $'\r' "$0" 2>/dev/null && normalized_script="$(mktemp)" && tr -d '\r' < "$0" > "$normalized_script" && chmod 700 "$normalized_script" && exec bash "$normalized_script" "$@" # CRLF-safe bootstrap
 
 set -Eeuo pipefail
 umask 022
@@ -86,14 +88,6 @@ on_error() {
   exit "$rc"
 }
 trap on_error ERR
-
-if [[ -r "$0" ]] && grep -q $'\r' "$0" 2>/dev/null; then
-  log "CRLF upptäcktes; startar en tillfällig LF-normaliserad kopia."
-  normalized_script="$(mktemp)"
-  tr -d '\r' < "$0" > "$normalized_script"
-  chmod 700 "$normalized_script"
-  exec bash "$normalized_script" "$@"
-fi
 
 detect_default_user() {
   if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
