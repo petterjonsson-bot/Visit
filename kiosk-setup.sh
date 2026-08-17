@@ -402,7 +402,7 @@ COMMON_PACKAGES=(
   procps python3-minimal sed util-linux x11-xserver-utils
 )
 if [[ "$DISPLAY_BACKEND" == "wayland" ]]; then
-  COMMON_PACKAGES+=(grim wtype wlr-randr)
+  COMMON_PACKAGES+=(grim swayidle wtype wlr-randr)
 else
   COMMON_PACKAGES+=(unclutter xdotool)
 fi
@@ -437,6 +437,77 @@ install -d -m 755 /usr/local/bin "$SYSTEMD_DIR" /etc/systemd/system.conf.d
 install -d -o "$PI_USER" -g "$KIOSK_GROUP" -m 755 \
   "$PROFILE_DIR" "$PROFILE_DIR/cache" "$PROFILE_DIR/disk-cache" "$PROFILE_DIR/CrashReports"
 chown -R "$PI_USER:$KIOSK_GROUP" "$PROFILE_DIR"
+
+install_labwc_cursor_hiding() {
+  [[ "$DISPLAY_BACKEND" == "wayland" ]] || return 0
+  command -v labwc >/dev/null 2>&1 || {
+    warn "Wayland-muspekaren kan inte döljas automatiskt eftersom labwc saknas."
+    return 0
+  }
+
+  local labwc_dir="$USER_HOME/.config/labwc"
+  local rc_file="$labwc_dir/rc.xml"
+  local begin='<!-- BEGIN blocks-kiosk cursor -->'
+  local end='<!-- END blocks-kiosk cursor -->'
+
+  install -d -o "$PI_USER" -g "$KIOSK_GROUP" -m 755 "$labwc_dir"
+
+  if [[ ! -e "$rc_file" ]]; then
+    cat > "$rc_file" <<'LABWC_RC'
+<?xml version="1.0"?>
+<labwc_config>
+  <keyboard>
+    <!-- BEGIN blocks-kiosk cursor -->
+    <keybind key="A-W-h">
+      <action name="HideCursor" />
+      <action name="WarpCursor" x="-1" y="-1" />
+    </keybind>
+    <!-- END blocks-kiosk cursor -->
+  </keyboard>
+</labwc_config>
+LABWC_RC
+  else
+    sed -i "\|^[[:space:]]*${begin}$|,\|^[[:space:]]*${end}$|d" "$rc_file"
+
+    if grep -q '</keyboard>' "$rc_file"; then
+      sed -i '/<\/keyboard>/i\
+    <!-- BEGIN blocks-kiosk cursor -->\
+    <keybind key="A-W-h">\
+      <action name="HideCursor" />\
+      <action name="WarpCursor" x="-1" y="-1" />\
+    </keybind>\
+    <!-- END blocks-kiosk cursor -->' "$rc_file"
+    elif grep -q '</openbox_config>' "$rc_file"; then
+      sed -i '/<\/openbox_config>/i\
+  <keyboard>\
+    <!-- BEGIN blocks-kiosk cursor -->\
+    <keybind key="A-W-h">\
+      <action name="HideCursor" />\
+      <action name="WarpCursor" x="-1" y="-1" />\
+    </keybind>\
+    <!-- END blocks-kiosk cursor -->\
+  </keyboard>' "$rc_file"
+    elif grep -q '</labwc_config>' "$rc_file"; then
+      sed -i '/<\/labwc_config>/i\
+  <keyboard>\
+    <!-- BEGIN blocks-kiosk cursor -->\
+    <keybind key="A-W-h">\
+      <action name="HideCursor" />\
+      <action name="WarpCursor" x="-1" y="-1" />\
+    </keybind>\
+    <!-- END blocks-kiosk cursor -->\
+  </keyboard>' "$rc_file"
+    else
+      warn "Kunde inte lägga till Labwc-bindning för dold muspekare i $rc_file."
+      return 0
+    fi
+  fi
+
+  chown "$PI_USER:$KIOSK_GROUP" "$rc_file"
+  log "Labwc döljer muspekaren efter 10 sekunders inaktivitet."
+}
+
+install_labwc_cursor_hiding
 
 write_config() {
   local temp_config
@@ -636,6 +707,17 @@ maintain_display() {
   fi
 }
 
+start_wayland_cursor_hider() {
+  [[ "${DISPLAY_BACKEND:-wayland}" == "wayland" ]] || return 0
+  command -v swayidle >/dev/null 2>&1 && command -v wtype >/dev/null 2>&1 || {
+    log "Kan inte starta automatisk dold muspekare: swayidle eller wtype saknas."
+    return 0
+  }
+
+  # Labwc-bindningen A-W-h installeras av kiosk-setup.sh och använder HideCursor.
+  swayidle -w timeout 10 'wtype -M alt -M logo -P h' >/dev/null 2>&1 &
+}
+
 main() {
   export HOME="$USER_HOME"
   export USER="$KIOSK_USER"
@@ -649,6 +731,7 @@ main() {
 
   wait_for_session
   maintain_display
+  start_wayland_cursor_hider
 
   mkdir -p "$PROFILE_DIR" "$PROFILE_DIR/cache" "$PROFILE_DIR/disk-cache" "$PROFILE_DIR/CrashReports"
   if ! touch "$PROFILE_DIR/.__write_test" 2>/dev/null; then
